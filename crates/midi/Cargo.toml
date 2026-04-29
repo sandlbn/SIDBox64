@@ -1,0 +1,8 @@
+[package]
+name = "drumbox64-midi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+drumbox64-core = { path = "../core" }
+midir = "0.10"

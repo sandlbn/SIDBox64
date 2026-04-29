@@ -1,0 +1,18 @@
+[package]
+name = "drumbox64"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "drumbox64"
+path = "src/main.rs"
+
+[features]
+hardware = ["drumbox64-asid/hardware"]
+
+[dependencies]
+drumbox64-core = { path = "../core" }
+drumbox64-midi = { path = "../midi" }
+drumbox64-asid = { path = "../asid" }
+iced = { version = "0.14.0", features = ["tokio"] }
+rfd = "0.15"
