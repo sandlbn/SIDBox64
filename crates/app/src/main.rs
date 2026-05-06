@@ -12,7 +12,7 @@ use iced::{
 
 use drumbox64_asid::AsidBackend;
 use drumbox64_core::{
-    presets, sequencer::step_duration_ms, Kit, Pattern, Track, Transport, NUM_STEPS, NUM_TRACKS,
+    presets, sequencer::step_duration_ms, Kit, Pattern, Track, Transport, NUM_STEPS,
 };
 use drumbox64_midi::{MidiBackend, MidiCommand, MidiInBackend, MidiInEvent};
 
@@ -32,10 +32,6 @@ struct DrumBox64 {
     preset_index: usize,
 
     output_mode: OutputMode,
-
-    // Per-track mixer
-    track_volume: [u8; NUM_TRACKS], // 0..=127, default 100
-    track_pan: [i8; NUM_TRACKS],    // -64..=63, default 0
 
     // MIDI OUT
     midi_ports: Vec<String>,
@@ -138,8 +134,6 @@ fn init() -> (DrumBox64, Task<Message>) {
         presets: all_presets,
         preset_index: 0,
         output_mode: OutputMode::Midi,
-        track_volume: [100; NUM_TRACKS],
-        track_pan: [0; NUM_TRACKS],
         midi_ports,
         selected_port_idx: None,
         midi_sender: None,
@@ -197,10 +191,10 @@ fn update(state: &mut DrumBox64, msg: Message) -> Task<Message> {
             }
         }
         Message::TrackVolumeChanged(t, v) => {
-            state.track_volume[t] = v.clamp(0.0, 127.0) as u8;
+            state.pattern.track_volume[t] = v.clamp(0.0, 127.0) as u8;
         }
         Message::TrackPanChanged(t, v) => {
-            state.track_pan[t] = v.clamp(-64.0, 63.0) as i8;
+            state.pattern.track_pan[t] = v.clamp(-64.0, 63.0) as i8;
         }
 
         Message::PresetSelected(item) => {
@@ -434,9 +428,9 @@ fn fire_step(state: &mut DrumBox64, step: u8) {
                 .map(|ev| {
                     let t = ev.track as usize;
                     let scaled = (ev.velocity.midi_velocity() as u16
-                        * state.track_volume[t] as u16
+                        * state.pattern.track_volume[t] as u16
                         / 127) as u8;
-                    (ev.track.midi_note(), scaled, state.track_pan[t])
+                    (ev.track.midi_note(), scaled, state.pattern.track_pan[t])
                 })
                 .collect();
             send_midi(state, MidiCommand::Notes(notes));
@@ -444,7 +438,7 @@ fn fire_step(state: &mut DrumBox64, step: u8) {
         OutputMode::Asid => {
             if let Some(ref mut backend) = state.asid_backend {
                 for ev in &events {
-                    let vol_127 = state.track_volume[ev.track as usize];
+                    let vol_127 = state.pattern.track_volume[ev.track as usize];
                     backend.trigger(ev, vol_127);
                 }
             }
@@ -628,8 +622,14 @@ fn view(state: &DrumBox64) -> Element<'_, Message> {
     // Mixer header
     let mixer_header = row![
         Space::new().width(Length::Fixed(50.0)),
-        text("VOL").size(11).color(theme::DIM).width(Length::Fixed(60.0)),
-        text("PAN").size(11).color(theme::DIM).width(Length::Fixed(60.0)),
+        text("VOL")
+            .size(11)
+            .color(theme::DIM)
+            .width(Length::Fixed(60.0)),
+        text("PAN")
+            .size(11)
+            .color(theme::DIM)
+            .width(Length::Fixed(60.0)),
     ]
     .spacing(4);
 
@@ -650,7 +650,7 @@ fn view(state: &DrumBox64) -> Element<'_, Message> {
 
                 let vol_slider = slider(
                     0.0f32..=127.0,
-                    state.track_volume[t] as f32,
+                    state.pattern.track_volume[t] as f32,
                     move |v| Message::TrackVolumeChanged(t, v),
                 )
                 .step(1.0f32)
@@ -658,7 +658,7 @@ fn view(state: &DrumBox64) -> Element<'_, Message> {
 
                 let pan_slider = slider(
                     -64.0f32..=63.0,
-                    state.track_pan[t] as f32,
+                    state.pattern.track_pan[t] as f32,
                     move |v| Message::TrackPanChanged(t, v),
                 )
                 .step(1.0f32)

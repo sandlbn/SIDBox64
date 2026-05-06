@@ -122,7 +122,10 @@ impl MidiInBackend {
             return Vec::new();
         };
         let ports = input.ports();
-        ports.iter().filter_map(|p| input.port_name(p).ok()).collect()
+        ports
+            .iter()
+            .filter_map(|p| input.port_name(p).ok())
+            .collect()
     }
 
     /// Connect and forward Start / Stop / Continue / Clock to `callback`.

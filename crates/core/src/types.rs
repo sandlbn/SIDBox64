@@ -172,6 +172,10 @@ pub struct Pattern {
     pub kit: Kit,
     pub tempo: u16,
     pub swing: u8,
+    /// Per-track volume, 0..=127 (default 100).
+    pub track_volume: [u8; NUM_TRACKS],
+    /// Per-track pan, -64..=63 (default 0 = centered).
+    pub track_pan: [i8; NUM_TRACKS],
 }
 
 impl Default for Pattern {
@@ -182,6 +186,8 @@ impl Default for Pattern {
             kit: Kit::default(),
             tempo: 120,
             swing: 0,
+            track_volume: [100; NUM_TRACKS],
+            track_pan: [0; NUM_TRACKS],
         }
     }
 }

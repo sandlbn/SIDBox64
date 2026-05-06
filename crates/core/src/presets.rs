@@ -7,6 +7,7 @@ fn mk(name: &str, kit: Kit, tempo: u16, swing: u8, raw: [[u8; NUM_STEPS]; NUM_TR
         kit,
         tempo,
         swing,
+        ..Pattern::default()
     }
 }
 
