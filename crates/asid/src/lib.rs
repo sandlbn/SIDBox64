@@ -1,6 +1,9 @@
 pub mod kits;
+pub mod sample;
 
-use drumbox64_core::{DrumEvent, Kit, Velocity};
+pub use sample::{load_wav_as_sid_sample, PAL_CYCLES_PER_SAMPLE, TARGET_SAMPLE_RATE};
+
+use drumbox64_core::{DrumEvent, Kit, Velocity, NUM_TRACKS};
 use kits::{DrumVoice, TRACK_TO_VOICE, VOICE_NUM, VOICE_SID};
 
 /// Active voice sweep state (mirrors VoiceState in original drumbox.h).
@@ -27,6 +30,9 @@ struct VoiceState {
 pub struct AsidBackend {
     voices: [VoiceState; 6],
     kit: Kit,
+    /// Per-track 4-bit SID samples for `$D418` playback.  When `Some`, the
+    /// sample replaces the synth voice for that track.
+    samples: [Option<Vec<u8>>; NUM_TRACKS],
 
     #[cfg(feature = "hardware")]
     device: usbsid_pico::UsbSid,
@@ -39,6 +45,7 @@ impl AsidBackend {
         Self {
             voices: Default::default(),
             kit,
+            samples: Default::default(),
         }
     }
 
@@ -50,6 +57,9 @@ impl AsidBackend {
         #[cfg(feature = "hardware")]
         {
             let mut device = usbsid_pico::UsbSid::new();
+            // Bigger ring so a couple seconds of $D418 sample writes (~123 cycles each
+            // at 8 kHz) fit without overrun.
+            device.set_buffer_size(65536);
             device
                 .init(true, true)
                 .map_err(|e| format!("USBSID-Pico: {e}"))?;
@@ -58,6 +68,7 @@ impl AsidBackend {
             return Ok(Self {
                 voices: Default::default(),
                 kit,
+                samples: Default::default(),
                 device,
             });
         }
@@ -75,8 +86,40 @@ impl AsidBackend {
         self.kit = kit;
     }
 
+    /// Assign a 4-bit, 8 kHz sample buffer to a track.  When set, triggers
+    /// stream the buffer to `$D418` on the track's SID chip instead of
+    /// programming the synth voice.
+    pub fn set_sample(&mut self, track: usize, samples: Vec<u8>) {
+        if track < NUM_TRACKS {
+            self.samples[track] = Some(samples);
+        }
+    }
+
+    pub fn clear_sample(&mut self, track: usize) {
+        if track < NUM_TRACKS {
+            self.samples[track] = None;
+        }
+    }
+
+    pub fn has_sample(&self, track: usize) -> bool {
+        track < NUM_TRACKS && self.samples[track].is_some()
+    }
+
+    /// Length in 4-bit samples (0 if no sample loaded).
+    pub fn sample_len(&self, track: usize) -> usize {
+        if track < NUM_TRACKS {
+            self.samples[track].as_ref().map_or(0, |s| s.len())
+        } else {
+            0
+        }
+    }
+
     /// Trigger a drum event, programming the SID voice registers.
     /// `volume_127` scales the SID master-volume derived from the velocity (127 = no scaling).
+    ///
+    /// If a sample is loaded for the track, streams it to `$D418` instead of
+    /// running the synth voice.  Note that `$D418` is per-chip, so sample
+    /// playback briefly silences the other voices on the same SID.
     pub fn trigger(&mut self, event: &DrumEvent, volume_127: u8) {
         if event.velocity == Velocity::Off {
             return;
@@ -85,6 +128,15 @@ impl AsidBackend {
         let track_idx = event.track as usize;
         let vi = TRACK_TO_VOICE[track_idx];
         let sid_chip = VOICE_SID[vi];
+
+        // Sample mode — stream 4-bit nibbles to $D418 at ~8 kHz.
+        if self.samples[track_idx].is_some() {
+            self.play_sample(track_idx, sid_chip, volume_127);
+            self.voices[vi].active = false;
+            return;
+        }
+
+        // Synth voice mode — original behaviour.
         let voice = VOICE_NUM[vi];
         let kv = &kits::kit_for(self.kit)[track_idx];
         let base_vol = event.velocity.sid_vol() as u16;
@@ -103,6 +155,34 @@ impl AsidBackend {
         vs.freq2 = kv.freq2;
 
         self.flush();
+    }
+
+    /// Stream a per-track sample to `$D418` on the given SID chip.
+    /// `volume_127` scales modulation depth around the silent midpoint (8).
+    fn play_sample(&mut self, track: usize, sid: u8, volume_127: u8) {
+        #[cfg(feature = "hardware")]
+        {
+            let reg = 0x18 + sid * 0x20;
+            let scale = volume_127 as i32;
+            // Borrow scope so the &self borrow is released before set_flush.
+            {
+                let sample = match self.samples[track].as_ref() {
+                    Some(s) => s,
+                    None => return,
+                };
+                for &nibble in sample {
+                    let scaled = (8 + (nibble as i32 - 8) * scale / 127).clamp(0, 15) as u8;
+                    let _ = self
+                        .device
+                        .write_ring_cycled(reg, scaled, PAL_CYCLES_PER_SAMPLE);
+                }
+            }
+            self.device.set_flush();
+        }
+        #[cfg(not(feature = "hardware"))]
+        {
+            let _ = (track, sid, volume_127);
+        }
     }
 
     /// Advance sweep state by one tick (~240 Hz).  Call from a timer callback.

@@ -10,3 +10,4 @@ hardware = ["dep:usbsid-pico"]
 [dependencies]
 drumbox64-core = { path = "../core" }
 usbsid-pico = { version = "0.1.9", features = ["usb"], optional = true }
+hound = "3"

@@ -95,6 +95,9 @@ enum Message {
     MidiInPortSelected(String),
     MidiInDisconnect,
     AsidConnect,
+    LoadSamplePressed(usize),
+    SampleLoaded(usize, PathBuf),
+    ClearSample(usize),
     SavePressed,
     LoadPressed,
     SaveConfirmed(PathBuf),
@@ -109,7 +112,7 @@ fn main() -> iced::Result {
         .subscription(subscription)
         .theme(Theme::Dark)
         .window(iced::window::Settings {
-            size: iced::Size::new(1180.0, 580.0),
+            size: iced::Size::new(1280.0, 600.0),
             resizable: true,
             ..Default::default()
         })
@@ -287,6 +290,48 @@ fn update(state: &mut DrumBox64, msg: Message) -> Task<Message> {
                 state.status_msg = format!("ASID: {e}");
             }
         },
+
+        Message::LoadSamplePressed(track) => {
+            return Task::future(async move {
+                if let Some(f) = rfd::AsyncFileDialog::new()
+                    .add_filter("WAV Audio", &["wav"])
+                    .pick_file()
+                    .await
+                {
+                    Message::SampleLoaded(track, f.path().to_path_buf())
+                } else {
+                    Message::Noop
+                }
+            });
+        }
+        Message::SampleLoaded(track, path) => match drumbox64_asid::load_wav_as_sid_sample(&path) {
+            Ok(samples) => {
+                let len = samples.len();
+                let secs = len as f32 / drumbox64_asid::TARGET_SAMPLE_RATE as f32;
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("sample.wav");
+                if let Some(ref mut backend) = state.asid_backend {
+                    backend.set_sample(track, samples);
+                    state.status_msg = format!(
+                        "Sample {name} → {} ({:.2}s)",
+                        Track::ALL[track].label(),
+                        secs
+                    );
+                } else {
+                    state.status_msg =
+                        format!("Connect ASID first — sample not loaded ({len} bytes)");
+                }
+            }
+            Err(e) => state.status_msg = format!("Sample error: {e}"),
+        },
+        Message::ClearSample(track) => {
+            if let Some(ref mut backend) = state.asid_backend {
+                backend.clear_sample(track);
+                state.status_msg = format!("Cleared sample on {}", Track::ALL[track].label());
+            }
+        }
 
         Message::SavePressed => {
             return Task::future(async move {
@@ -630,6 +675,10 @@ fn view(state: &DrumBox64) -> Element<'_, Message> {
             .size(11)
             .color(theme::DIM)
             .width(Length::Fixed(60.0)),
+        text("SAMPLE")
+            .size(11)
+            .color(theme::DIM)
+            .width(Length::Fixed(80.0)),
     ]
     .spacing(4);
 
@@ -664,6 +713,21 @@ fn view(state: &DrumBox64) -> Element<'_, Message> {
                 .step(1.0f32)
                 .width(Length::Fixed(60.0));
 
+                let has_sample = state.asid_backend.as_ref().is_some_and(|b| b.has_sample(t));
+                let sample_label = if has_sample {
+                    " ● Loaded "
+                } else {
+                    " + WAV "
+                };
+                let sample_msg = if has_sample {
+                    Message::ClearSample(t)
+                } else {
+                    Message::LoadSamplePressed(t)
+                };
+                let sample_btn = button(text(sample_label).size(11).color(theme::TEXT))
+                    .style(theme::control_style(has_sample))
+                    .on_press(sample_msg);
+
                 let steps = row((0..NUM_STEPS)
                     .map(|s| {
                         let vel = state.pattern.steps[t][s];
@@ -680,7 +744,9 @@ fn view(state: &DrumBox64) -> Element<'_, Message> {
                     .collect::<Vec<_>>())
                 .spacing(2);
 
-                row![label, vol_slider, pan_slider, steps]
+                let sample_cell = container(sample_btn).width(Length::Fixed(80.0));
+
+                row![label, vol_slider, pan_slider, sample_cell, steps]
                     .spacing(4)
                     .align_y(iced::Alignment::Center)
                     .into()
